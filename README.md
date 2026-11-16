@@ -1,28 +1,29 @@
 # agentfile.nvim 🪐
 
-> **Single-buffer AI agent workspace cho Neovim (>= 0.10)**
-> Chat trực tiếp với AI Agent trên **duy nhất một file**, tool calling minh bạch `@tool(...)`, cấu hình ở header frontmatter, và block `[think]` tự động gấp gọn & loại bỏ khỏi context tiếp theo.
+> **Single-buffer AI agent workspace for Neovim (>= 0.10)**
+> Chat with an AI agent directly in **one file**, with transparent `@tool(...)` tool calling, a YAML frontmatter header for configuration, and `[think]` blocks that fold automatically and are stripped from future context.
 
 ---
 
-## ✨ Điểm nổi bật
+## ✨ Highlights
 
-- **Single Buffer as Source of Truth**: Toàn bộ cấu hình header, lịch sử chat (`[system]`, `[me]`, `[agent]`), suy nghĩ (`[think]`), tool calls (`@tool(...)`), và kết quả (`[result]`) đều nằm trên 1 file duy nhất.
-- **Save-to-Send**: Chỉ cần gõ `[me] nội dung...` rồi `:w` để gửi prompt hoặc trigger lượt suy nghĩ tiếp theo.
-- **Bảo vệ Turn Detection & Reentrancy**: Không lo gửi trùng lặp khi sửa header hay format file.
-- **Symmetric Tool Calling**: Cả bạn lẫn AI đều dùng chung cú pháp `@tool_name(json_args)`.
-- **Heredoc cho nội dung đa dòng**: Code nhiều dòng truyền qua `<<'EOF' ... EOF`, không cần escape vào chuỗi JSON.
-- **Reasoning `[think]`**: Block suy nghĩ hiển thị trên buffer và fold tự động, **nhưng tự động bị strip khi gửi lên API** để giữ context tinh gọn.
-- **Human-in-the-loop**: Duyệt từng tool nguy hiểm (`auto_run_tools: false`), từ chối kèm feedback để Agent đổi hướng ngay.
-- **Phục hồi lỗi**: Retry tự động khi 429/5xx, dừng khi model trả lời hỏng liên tiếp, truncation theo budget context.
-- **Project Memory**: Lưu các bài học đã chưng cất vào `.agentfile/memory.md` và bơm vào system prompt.
-- **Kết thúc tường minh `@done`**: Model chủ động báo hoàn thành thay vì đoán "không gọi tool = xong".
+- **Single Buffer as Source of Truth**: Header config, chat history (`[system]`, `[me]`, `[agent]`), reasoning (`[think]`), tool calls (`@tool(...)`), and results (`[result]`) all live in one file.
+- **Save-to-Send**: Just type under `[me] ...` and hit `:w` to send the prompt or trigger the next reasoning turn.
+- **Turn Detection & Reentrancy Guarding**: No accidental duplicate sends when you edit the header or reformat the file.
+- **Symmetric Tool Calling**: You and the AI share the same `@tool_name(json_args)` syntax.
+- **Heredoc for Multi-line Content**: Pass multi-line code via `<<'EOF' ... EOF` without escaping into a JSON string.
+- **`[think]` Reasoning**: Thinking blocks render on the buffer and fold automatically, **but are stripped from the API payload** to keep context lean.
+- **Human-in-the-loop**: Approve dangerous tools (`auto_run_tools: false`), reject with feedback to steer the agent immediately.
+- **Failure Recovery**: Automatic retry on 429/5xx, stop on consecutive malformed responses, context-budget truncation.
+- **Project Memory**: Store distilled lessons in `.agentfile/memory.md` and inject them into the system prompt.
+- **Explicit `@done`**: The model declares completion instead of relying on the ambiguous "no tool call" signal.
+- **Pluggable Agent Loop**: Swap the planner and executor strategies per chat (see below).
 
 ---
 
-## 📦 Cài đặt
+## 📦 Installation
 
-Dùng [lazy.nvim](https://github.com/folke/lazy.nvim):
+Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
@@ -44,43 +45,45 @@ Dùng [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ---
 
-## 🚀 Hướng dẫn nhanh
+## 🚀 Quick Start
 
-1. Chạy lệnh:
+1. Run:
    ```vim
    :Agentfile
    ```
-   (Mở file `chat.agentfile` kèm template mẫu có sẵn).
+   (Opens `chat.agentfile` with a starter template.)
 
-   Buffer chat dùng `filetype=markdown` để plugin render markdown hoạt động bình thường; agentfile.nvim vẫn tự gắn syntax marker, folding và keymaps riêng.
+   The chat buffer uses `filetype=markdown` so markdown renderers work normally; agentfile.nvim attaches its own marker syntax, folding, and keymaps on top.
 
-   Dòng `[me]` mới nhất tự hiển thị context size ước lượng:
+   The latest `[me]` line shows an estimated context size:
    ```markdown
    [me](context 1234/32768 · step 2/4 · 12s)
    ```
-   `context_window` lấy từ frontmatter (mặc định `32768`). Số bên trái là ước lượng token của payload sắp gửi, được hiệu chỉnh bằng token thật từ API khi bật `include_usage: true`. Phần `(context ...)` chỉ để hiển thị, không gửi cho model.
+   `context_window` comes from the frontmatter (default `32768`). The left number is a token estimate of the next payload, calibrated with the provider's real count when `include_usage: true` is set. The `(context ...)` suffix is UI-only and never sent to the model.
 
-2. Cấu hình header ở đầu buffer (nếu cần):
+2. Configure the header at the top of the buffer (optional):
    ```yaml
    ---
-   host: http://localhost:9931/v1 # hoặc openrouter, ollama, deepseek...
+   host: http://localhost:9931/v1 # or openrouter, ollama, deepseek...
    model: ggml-org/gemma-4-E2B-it-GGUF:Q8_0 # Gemma 4 (GGUF, Q8_0)
    token: env:OPENAI_API_KEY
-   context_window: 32768 # dùng để hiển thị [me](context used/limit)
-   max_tokens: 2048 # giới hạn output (nhất là với model reasoning như DeepSeek R1)
-   # temperature: 0.6 # khuyến nghị 0.5 - 0.7 cho reasoning model nhỏ
+   context_window: 32768 # used for [me](context used/limit)
+   max_tokens: 2048 # output cap (especially for reasoning models like DeepSeek R1)
+   # temperature: 0.6 # 0.5 - 0.7 recommended for small reasoning models
    # top_p: 0.95
-   # presence_penalty: 0.2 # hạn chế lặp lại suy nghĩ
+   # presence_penalty: 0.2 # reduce reasoning repetition loops
    # thinking:
-   #   budget_tokens: 1024 # giới hạn token suy nghĩ (OpenRouter / Anthropic)
-   #   concise: true # ép model suy nghĩ ngắn gọn (< 150 từ)
-   #   enabled: false # tắt suy nghĩ hoàn toàn
-   #   keep_on_error: false # gửi lại [think] một lần khi tool vừa fail
-   auto_run_tools: false # false: hỏi xác nhận trước khi chạy lệnh hệ thống
-   # retries: 2 # thử lại khi 429/5xx/mất kết nối
+   #   budget_tokens: 1024 # reasoning token cap (OpenRouter / Anthropic)
+   #   concise: true # force concise reasoning (< 150 words)
+   #   enabled: false # disable thinking entirely
+   #   keep_on_error: false # replay [think] once when a tool just failed
+   auto_run_tools: false # false: ask before running system commands
+   # retries: 2 # retry on 429/5xx/connection loss
    # retry_delay_ms: 1000
-   # include_usage: true # bật để hiển thị token thật (một số server GGUF không hỗ trợ)
-   # tool_mode: text # text (mặc định) hoặc native (dùng tool_calls của API)
+   # include_usage: true # show real token usage (some GGUF servers don't support it)
+   # tool_mode: text # text (default) or native (use the API's tool_calls)
+   # planner: plan_first # react (default) or plan_first (plan before acting)
+   # executor: parallel_reads # sequential (default) or parallel_reads (run read-only tools concurrently)
    # memory:
    #   enabled: true
    #   path: .agentfile/memory.md
@@ -90,70 +93,95 @@ Dùng [lazy.nvim](https://github.com/folke/lazy.nvim):
    ---
    ```
 
-3. Gõ câu hỏi dưới tag `[me]`:
+3. Type your question under the `[me]` tag:
    ```markdown
    [me]
-   Hãy kiểm tra file `lua/agentfile/init.lua` và chạy test giúp tôi:
+   Check the file `lua/agentfile/init.lua` and run the tests for me:
    @read_file({"path": "lua/agentfile/init.lua"})
    ```
 
-4. Gõ `:w` (lưu file) ➔ AI bắt đầu suy nghĩ trong `[think]` và trả lời trong `[agent]`.
+4. Type `:w` (save) ➔ the AI thinks in `[think]` and answers in `[agent]`.
 
 ---
 
-## 🛠️ Phím tắt & Lệnh
+## 🛠️ Commands & Keymaps
 
-| Phím tắt / Lệnh | Mô tả |
+| Command / Keymap | Description |
 |---|---|
-| `:Agentfile [file]` | Mở hoặc tạo một buffer chat `.agentfile` |
-| `:AgentfileToggle` (`<leader>at`) | Bật/tắt panel chat dạng split bên phải |
-| `:AgentfileNew [topic]` | Tạo một session chat mới theo topic trong `.agentfile/` |
-| `:AgentfileSessions` | Liệt kê và chọn mở các session chat trong dự án |
-| `:AgentfileBranch [topic]` (`<leader>ab`) | Fork lịch sử chat từ đầu đến con trỏ sang một session mới |
-| `:AgentfileDiag` (`<leader>ad`) | Lấy danh sách lỗi LSP Diagnostics đưa vào chat |
-| `:AgentfileGitDiff` (`<leader>ag`) | Lấy `git diff` đưa vào chat |
-| `:AgentfileUndo` (`<leader>au`) | Hoàn tác thay đổi file của tool dưới con trỏ (dựa trên snapshot) |
-| `:AgentfileDiff` (`<leader>aD`) | Mở split xem trước diff thay đổi file của tool |
-| `:AgentfileSend` (`<leader>as`) | Ép gửi prompt hiện tại |
-| `:AgentfileCancel` (`<leader>ax`) | Hủy request / stream đang chạy |
-| `:AgentfileSelection [snippet\|tool]` (`<leader>ac`) | Gửi vùng chọn ở visual mode vào chat |
-| `:AgentfileContext [files...]` (`<leader>af`) | Thêm file hiện tại (hoặc nhiều file/glob) làm context |
-| `<leader>aF` | Nhập danh sách file context (cách nhau bởi dấu cách) |
-| `:AgentfileApprove` (`<leader>ay`) | Chạy tool đang chờ (tương đương sửa `[ask]` thành `y`) |
-| `:AgentfileReject [lý_do]` (`<leader>an`) | Từ chối tool kèm chỉ dẫn feedback cho Agent |
-| `:AgentfileExport [path]` (`<leader>ae`) | Xuất transcript ra JSON trajectory |
-| `:AgentfileMemory` (`<leader>am`) | Mở (và tạo nếu chưa có) file bộ nhớ dự án |
+| `:Agentfile [file]` | Open or create a `.agentfile` chat buffer |
+| `:AgentfileToggle` (`<leader>at`) | Toggle the chat panel in a right-side split |
+| `:AgentfileNew [topic]` | Create a new chat session by topic under `.agentfile/` |
+| `:AgentfileSessions` | List and open an existing session in the project |
+| `:AgentfileBranch [topic]` (`<leader>ab`) | Fork history up to the cursor into a new session |
+| `:AgentfileDiag` (`<leader>ad`) | Ingest LSP diagnostics into chat |
+| `:AgentfileGitDiff` (`<leader>ag`) | Ingest `git diff` into chat |
+| `:AgentfileUndo` (`<leader>au`) | Revert the file modification of the tool under the cursor (via snapshot) |
+| `:AgentfileDiff` (`<leader>aD`) | Open a split showing the diff of the tool's modification |
+| `:AgentfileSend` (`<leader>as`) | Force-send the current prompt |
+| `:AgentfileCancel` (`<leader>ax`) | Cancel the running request / stream |
+| `:AgentfileSelection [snippet\|tool]` (`<leader>ac`) | Send the visual selection to chat |
+| `:AgentfileContext [files...]` (`<leader>af`) | Add the current file (or files/globs) as context |
+| `<leader>aF` | Prompt for a space-separated list of context files |
+| `:AgentfileApprove` (`<leader>ay`) | Run the pending tool (equivalent to editing `[ask]` to `y`) |
+| `:AgentfileReject [reason]` (`<leader>an`) | Reject the tool with optional feedback for the agent |
+| `:AgentfileExport [path]` (`<leader>ae`) | Export the transcript as a JSON trajectory |
+| `:AgentfileMemory` (`<leader>am`) | Open (and create if needed) the project memory file |
 
-### Duyệt tool & Điều hướng Agent
+### Tool approval & agent steering
 
-Khi tool nguy hiểm cần phê duyệt (`auto_run_tools: false`):
-- **Allow** → chạy tool, ghi `[result ... status=ok]`/`status=error`, tiếp tục batch.
-- **Deny** hoặc đóng prompt → không chạy, ghi `[result ... status=rejected]`, dừng batch.
-- Từ chối kèm chỉ dẫn: `n: lý do` (ví dụ `(y/N): n: Đừng sửa auth.go, hãy sửa router.go`). Agent nhận feedback này trong `[result]` để đổi hướng ngay.
-- Hoàn tác (`<leader>au`): đặt con trỏ vào `[result]` rồi nhấn `<leader>au` để phục hồi file.
+When a dangerous tool needs approval (`auto_run_tools: false`):
+- **Allow** → run the tool, record `[result ... status=ok]`/`status=error`, continue the batch.
+- **Deny** or dismiss the prompt → skip, record `[result ... status=rejected]`, stop the batch.
+- Reject with guidance: `n: reason` (e.g. `(y/N): n: Don't touch auth.go, edit router.go instead`). The agent receives this feedback in `[result]` and pivots immediately.
+- Undo (`<leader>au`): place the cursor on a `[result]` block, then press `<leader>au` to restore the file.
 
-### Cấu hình agent loop
+### Agent loop configuration
 
-Frontmatter của từng chat hỗ trợ:
+Each chat's frontmatter supports:
 
 ```yaml
 agent:
   enabled: true
-  max_steps: 4            # số lần gọi model cho mỗi yêu cầu [me]
-  max_format_errors: 3    # dừng khi model trả lời hỏng liên tiếp (0 = không giới hạn)
-  # wall_time_limit: 300  # giây cho mỗi yêu cầu (0 = không giới hạn)
+  max_steps: 4            # max model calls per [me] request
+  max_format_errors: 3    # stop after N consecutive malformed responses (0 = unlimited)
+  # wall_time_limit: 300  # seconds per request (0 = unlimited)
 ```
 
-- `enabled` mặc định `true`. Đặt `false` để chat thường: plugin hiển thị câu trả lời nhưng không tự chạy tool do model gọi.
-- `max_steps` là số lần gọi model tối đa cho mỗi yêu cầu `[me]`. Mặc định 4.
-- `max_format_errors` là số lần model trả lời hỏng liên tiếp (rỗng hoặc bị `max_tokens` cắt) trước khi dừng.
-- `max_turns` chỉ giới hạn lịch sử gửi đi. `max_iterations: N` cũ vẫn được hỗ trợ như `N + 1` lần gọi.
-- Tool ghi file (`write_file`, `edit_file`, `run_command`) tối đa **1 call/lượt**; chỉ tool read-only mới được batch.
-- Kết thúc tường minh: model gọi `@done({"summary": "..."})` một mình ở bước cuối.
+- `enabled` defaults to `true`. Set `false` for plain chat: the plugin renders the reply but does not auto-run model-issued tools.
+- `max_steps` is the maximum number of model calls per `[me]` request. Default 4.
+- `max_format_errors` is the number of consecutive malformed responses (empty or cut off by `max_tokens`) tolerated before stopping.
+- `max_turns` limits the sent history independently. Legacy `max_iterations: N` still maps to `N + 1` calls.
+- File-modifying tools (`write_file`, `edit_file`, `run_command`) are limited to **1 call/turn**; only read-only tools may be batched.
+- Explicit completion: the model calls `@done({"summary": "..."})` alone as its final step.
 
-### Truyền nội dung đa dòng (heredoc)
+### Pluggable loop strategies
 
-Thay vì nhồi code nhiều dòng vào chuỗi JSON, dùng heredoc — nội dung giữa hai marker được truyền nguyên bản:
+The agent loop is decomposed into phases, each with swappable strategies selectable under `agent:`:
+
+| Phase | Strategy | Description |
+|---|---|---|
+| `planner` | `react` *(default)* | Progress note, thinking controls, and recovery nudges |
+| `planner` | `plan_first` | Asks for a short step-by-step plan before acting (Plan-and-Solve) |
+| `executor` | `sequential` *(default)* | Runs tools one at a time in order |
+| `executor` | `parallel_reads` | Runs read-only tools concurrently, then any file/command tool (ReWOO) |
+
+```yaml
+agent:
+  planner: plan_first
+  executor: parallel_reads
+```
+
+Register custom strategies from Lua:
+
+```lua
+require("agentfile").register_strategy("planner", "my_planner", function(ctx)
+  return "Your custom system-prompt augmentation."
+end)
+```
+
+### Multi-line content (heredoc)
+
+Instead of stuffing multi-line code into a JSON string, use a heredoc — the body between the markers is passed verbatim:
 
 ```markdown
 @write_file({"path": "src/main.go"}) <<'EOF'
@@ -162,25 +190,25 @@ func main() { println("hi") }
 EOF
 ```
 
-Body thành `content` (`write_file`), `replacement` (`edit_file`) hoặc `command` (`run_command`). Delimiter không quote (`<<EOF`) cũng được chấp nhận. Marker bên trong body (`[system]`, `[me]`...) được giữ nguyên, không tạo block chat.
+The body becomes `content` (`write_file`), `replacement` (`edit_file`), or `command` (`run_command`). An unquoted delimiter (`<<EOF`) is also accepted. Markers inside the body (`[system]`, `[me]`, ...) are kept literal and do not create chat blocks.
 
-### Nội dung tool result
+### Tool results
 
-Tool output được bọc trong code fence `` ```agentfile-result ``. Marker bên trong là dữ liệu, không tạo block chat. Khi gửi cho model, plugin bỏ lớp bọc và giữ nội dung trong message kết quả tool.
+Tool output is wrapped in a ``` ```agentfile-result ``` code fence. Markers inside it are literal data, not chat blocks. When sending to the model, the plugin removes the envelope and keeps the content as the tool-result message.
 
-### Giới hạn context & phục hồi lỗi
+### Context budget & failure recovery
 
-- **Truncation theo budget**: output tool cắt còn ~30% context window (giữ **đầu + đuôi**, kèm số ký tự bị lược + gợi ý đọc ít hơn).
-- **Envelope rõ ràng**: `@run_command` luôn trả `<returncode>N</returncode>` tách bạch stdout/stderr.
-- **Retry tự động**: 429/5xx/mất kết nối được thử lại với backoff lũy thừa; 401/404/bad-URL báo lỗi ngay.
-- **Phục hồi response hỏng**: `finish_reason=length` hoặc response rỗng → không chạy tool (có thể đang viết dở), nhắc model trả lời ngắn hơn rồi thử lại, có trần `max_format_errors`.
-- **Meter chính xác**: `[me](context used/limit · step N/M · Ns)` dùng token thật khi bật `include_usage: true`.
+- **Budget truncation**: tool output is cut to ~30% of the context window (keeping **head + tail**, with an elided-size note and a hint on how to read less).
+- **Explicit envelope**: `@run_command` always returns `<returncode>N</returncode>`, keeping stdout/stderr separate.
+- **Automatic retry**: 429/5xx/connection loss retried with exponential backoff; auth/404/bad-URL fail immediately.
+- **Malformed response recovery**: `finish_reason=length` or an empty response never runs a (possibly half-written) tool; the model is asked to answer more briefly and retry, capped by `max_format_errors`.
+- **Accurate meter**: `[me](context used/limit · step N/M · Ns)` uses real token usage when `include_usage: true` is set.
 
 ---
 
 ## 🧠 Project Memory
 
-Lưu các **bài học đã chưng cất** (không phải suy nghĩ thô `[think]`) vào file bộ nhớ dự án và bơm vào system prompt các lượt sau. Model nhỏ đọc lại lời giải thích sai của chính nó thì bám vào sai lầm thay vì sửa — nên ta chỉ lưu bài học đã được xác nhận.
+Store **distilled lessons** (not raw `[think]`) in a project memory file and inject them into the system prompt. Replaying a small model's own wrong reasoning makes it defend the mistake instead of fixing it — so only verified lessons are stored.
 
 ```yaml
 memory:
@@ -192,24 +220,24 @@ memory:
   remember_repeated_failures: true
 ```
 
-Hai nguồn bài học (mặc định đều cần duyệt):
-1. **Bạn từ chối tool kèm lý do** (`n: lý do` / `:AgentfileReject lý do`) — tín hiệu đã được con người xác nhận.
-2. **Một tool fail 2 lần với cùng nguyên nhân** trong cùng session.
+Two signals produce a lesson (both require approval by default):
+1. **You reject a tool with a reason** (`n: reason` / `:AgentfileReject reason`) — already validated by the human steering the agent.
+2. **A tool fails twice with the same normalized cause** in one session.
 
-Bài học được dedup, giới hạn độ dài, cắt theo `max_chars` (dòng cũ rơi trước). Sửa bằng `:AgentfileMemory` hoặc trực tiếp.
+Lessons are deduplicated, length-limited, and capped by `max_chars` (oldest lines drop first). Edit them with `:AgentfileMemory` or by hand.
 
 ---
 
 ## 📤 Export Trajectory & Native Tool Calling
 
-- `:AgentfileExport [path]` xuất danh sách message (kèm model, agent config, token usage, số bước, `exit_status`) ra JSON để debug, replay, đánh giá và fine-tune.
-- `tool_mode: native` dùng giao diện `tool_calls` gốc của API thay vì parse text `@tool(...)`. Call native được ghi ngược vào transcript nên buffer vẫn là nguồn sự thật duy nhất.
+- `:AgentfileExport [path]` writes the exact message list (with model, agent config, token usage, step count, `exit_status`) as JSON for debugging, replay, evaluation, and fine-tuning.
+- `tool_mode: native` uses the provider's native `tool_calls` interface instead of parsing `@tool(...)` text. Native calls are rendered back into the transcript so the buffer remains the single source of truth.
 
 ---
 
-## 🎨 Tùy biến marker
+## 🎨 Customizing markers
 
-Marker mặc định: `[system]`, `[me]`, `[think]`, `[agent]`, `[result ...]`, `[ask] ... (y/N): `, `[reset]`, `[error]`, `[done]`.
+Default markers: `[system]`, `[me]`, `[think]`, `[agent]`, `[result ...]`, `[ask] ... (y/N): `, `[reset]`, `[error]`, `[done]`.
 
 ```lua
 require("agentfile").setup({
@@ -219,22 +247,22 @@ require("agentfile").setup({
     think  = "THOUGHTS:",
     agent  = "ASSISTANT:",
     result = "<<result%s>>", -- %s = id/status attributes
-    ask    = "<<ask>> %s",    -- %s = câu hỏi, phải kết thúc bằng (y/N):
+    ask    = "<<ask>> %s",    -- %s = question; must end with (y/N):
     reset  = "RESET",
     error  = "ERROR:",
   },
 })
 ```
 
-Khi không kết nối được model hoặc API trả lỗi, plugin ghi lỗi vào buffer dưới dạng block `[error]` và thêm `[me]` trống để thử lại.
+When the model cannot be reached or the API returns an error, the plugin writes an `[error]` block to the buffer followed by an empty `[me]` block so you can retry.
 
 ---
 
-## 🧩 Đăng ký Custom Tool
+## 🧩 Registering custom tools
 
 ```lua
 require("agentfile").register_tool("git_diff", {
-  description = "Lấy git diff hiện tại",
+  description = "Get the current git diff",
   parameters = {},
   is_dangerous = false,
   run = function(args, cb)
