@@ -4,6 +4,7 @@ local shell = require("agentfile.tools.shell")
 local image = require("agentfile.tools.image")
 local search = require("agentfile.tools.search")
 local symbols = require("agentfile.tools.symbols")
+local patch = require("agentfile.tools.patch")
 
 local M = {}
 
@@ -110,7 +111,7 @@ TOOL CALLING RULES:
 1. Write tool calls at the start of a line in format: @tool_name({"param": "value"})
 2. Never wrap tool calls in code fences or quotes.
 3. Call tools yourself directly; do NOT ask the user to run commands.
-4. Batch read-only calls, but use at most ONE file-modifying or command call (@write_file, @edit_file, @run_command) per turn.
+4. Batch read-only calls, but use at most ONE file-modifying or command call (@write_file, @edit_file, @apply_patch, @run_command) per turn.
 5. If a tool fails, read the error message carefully and fix the issue; do not repeat identical failing calls.
 6. When the task is complete, call @done({"summary": "what changed and how it was verified"}) as the only call in that turn.
 7. For multi-line code or scripts, use a heredoc so you never have to escape quotes/newlines inside a JSON string:
@@ -238,6 +239,18 @@ M.register("edit_file", {
   example = '@edit_file({"path": "config.json", "target": "\"debug\": false", "replacement": "\"debug\": true"})',
   is_dangerous = true,
   run = fs.edit_file
+})
+
+M.register("apply_patch", {
+  description = "Apply a unified diff (one or more @@ hunks) to a file. Prefer this for multi-site edits; supports small line-offset fuzz",
+  parameters = {
+    path = "string",
+    patch = "string (unified diff, or heredoc body)",
+    fuzz = "number (optional, default 3)",
+  },
+  example = '@apply_patch({"path": "src/main.lua"}) <<\'EOF\'\n@@ -1,2 +1,3 @@\n-return a\n+local x = a\n+return x\nEOF',
+  is_dangerous = true,
+  run = patch.apply
 })
 
 M.register("list_files", {

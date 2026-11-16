@@ -193,6 +193,11 @@ It returns plain text such as "agentfile · generating · step 2/4 ·
 - @write_file({"path": "file", "content": "..."})
 - @edit_file({"path": "file", "target": "old", "replacement": "new",
               "occurrence": 2, "replace_all": false})
+- @apply_patch({"path": "file"}) <<'EOF'
+    @@ -1,2 +1,3 @@
+    -old
+    +new
+  EOF
 - @run_command({"command": "...", "cwd": ".", "timeout_ms": 120000})
 - @list_files({"path": ".", "recursive": true, "max_depth": 2})
 - @grep({"pattern": "tool_calls", "path": "lua", "glob": "*.lua"})
@@ -230,6 +235,15 @@ to escape quotes or newlines inside a JSON string:
 <
 The body becomes `content` for @write_file, `replacement` for @edit_file, or
 `command` for @run_command. An unquoted delimiter (<<EOF) is also accepted.
+
+@apply_patch takes a unified diff (one or more `@@` hunks) as its heredoc body
+and applies it to the target file with small line-offset fuzz; prefer it over
+@edit_file for multi-site edits. Like the other mutating tools it records a
+snapshot so `:AgentfileUndo` can revert it.
+
+The `scope` planner asks 1-2 clarifying questions for underspecified requests
+(or states a concrete scope) before any tool runs. Enable it per chat with
+`agent.planner: scope`.
 
 Tool output is truncated to ~30% of the context window (head + tail kept,
 with an elided-size note and a hint on how to read less). @run_command

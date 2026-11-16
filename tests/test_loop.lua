@@ -43,6 +43,24 @@ t.run("register overrides the default strategy with graceful fallback", function
   t.assert_true(fallback:find("Agent step", 1, true) ~= nil, "unknown planner falls back to react")
 end)
 
+t.run("scope planner clarifies vague requests and states scope otherwise", function()
+  local vague_ctx = base_ctx(1)
+  vague_ctx.blocks = { { role = "user", content = "fix the bug" } }
+  local vague = loop.planners.scope(vague_ctx)
+  t.assert_true(vague:find("underspecified", 1, true) ~= nil, "vague request asks to clarify")
+  t.assert_true(vague:find("Agent step 1 of 4", 1, true) ~= nil, "scope keeps react notes")
+
+  local specific_ctx = base_ctx(1)
+  specific_ctx.blocks = { { role = "user", content = "Fix lua/agentfile/ui.lua winbar rendering" } }
+  local specific = loop.planners.scope(specific_ctx)
+  t.assert_true(specific:find("underspecified", 1, true) == nil, "specific request does not clarify")
+  t.assert_true(specific:find("concrete scope", 1, true) ~= nil, "specific request asks for a scope statement")
+
+  local late = loop.planners.scope(base_ctx(3))
+  t.assert_true(late:find("underspecified", 1, true) == nil
+    and late:find("concrete scope", 1, true) == nil, "scope only on opening step")
+end)
+
 t.run("sequential executor runs tools in order", function()
   local order = {}
   local finished = false

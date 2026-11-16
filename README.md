@@ -90,7 +90,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
    #   path: .agentfile/memory.md
    #   max_chars: 1200
    #   require_approval: true
-   skills: [read_file, write_file, edit_file, run_command, list_files, grep, glob, symbols, skeleton, done]
+   skills: [read_file, write_file, edit_file, apply_patch, run_command, list_files, grep, glob, symbols, skeleton, done]
    ---
    ```
 
@@ -193,6 +193,7 @@ The agent loop is decomposed into phases, each with swappable strategies selecta
 |---|---|---|
 | `planner` | `react` *(default)* | Progress note, thinking controls, and recovery nudges |
 | `planner` | `plan_first` | Asks for a short step-by-step plan before acting (Plan-and-Solve) |
+| `planner` | `scope` | Asks 1-2 clarifying questions for vague requests, or states a concrete scope before acting |
 | `executor` | `sequential` *(default)* | Runs tools one at a time in order |
 | `executor` | `parallel_reads` | Runs read-only tools concurrently, then any file/command tool (ReWOO) |
 
@@ -221,7 +222,9 @@ func main() { println("hi") }
 EOF
 ```
 
-The body becomes `content` (`write_file`), `replacement` (`edit_file`), or `command` (`run_command`). An unquoted delimiter (`<<EOF`) is also accepted. Markers inside the body (`[system]`, `[me]`, ...) are kept literal and do not create chat blocks.
+The body becomes `content` (`write_file`), `replacement` (`edit_file`), `patch` (`apply_patch`), or `command` (`run_command`). An unquoted delimiter (`<<EOF`) is also accepted. Markers inside the body (`[system]`, `[me]`, ...) are kept literal and do not create chat blocks.
+
+`@apply_patch({"path": "src/main.go"})` takes a unified diff (one or more `@@` hunks) as the heredoc body and applies it with small line-offset fuzz:
 
 ### Tool results
 

@@ -122,6 +122,64 @@ function M.planners.plan_first(ctx)
   return table.concat(parts, "\n\n")
 end
 
+--- Text of the most recent user request in this turn.
+---@param blocks table[]
+---@return string
+local function last_user_text(blocks)
+  for i = #blocks, 1, -1 do
+    if blocks[i].role == "user" then
+      return blocks[i].content or ""
+    end
+  end
+  return ""
+end
+
+--- Heuristic: is a request too underspecified to act on directly?
+--- Very short prompts that name no file, path or tool are treated as vague.
+---@param text string
+---@return boolean
+local function is_vague(text)
+  text = tostring(text or ""):gsub("%s+", " ")
+  local words = 0
+  for _ in text:gmatch("%S+") do
+    words = words + 1
+  end
+  if words == 0 then
+    return false
+  end
+  if words >= 25 then
+    return false
+  end
+  -- Any concrete anchor: a path-like token, a file extension, or a tool call.
+  if text:find("[%w_%-/]+%.[%w]+") then return false end
+  if text:find("/", 1, true) then return false end
+  if text:find("@[%w_]+") then return false end
+  return words <= 12
+end
+
+--- Scope planner: on the opening step, either ask for clarification (vague
+--- request) or state a concrete scope before touching tools. This is the
+--- "conversational scoping" phase; the reply ends the turn so the user can
+--- answer before any file is touched.
+function M.planners.scope(ctx)
+  local buf_state = ctx.buf_state
+  local parts = {}
+
+  if (buf_state.agent_steps or 0) <= 1 then
+    if is_vague(last_user_text(ctx.blocks)) then
+      parts[#parts + 1] = "The user's request is underspecified. Before running any tool, reply with a short clarification only: state your best-guess scope (which files/modules/components are involved) and ask the 1-2 most important questions needed to disambiguate. Do not call tools until the user answers."
+    else
+      parts[#parts + 1] = "Before acting, state in one short line your understanding and the concrete scope (the files/modules you intend to touch), then proceed with tools."
+    end
+  end
+
+  local base = M.planners.react(ctx)
+  if base ~= "" then
+    parts[#parts + 1] = base
+  end
+  return table.concat(parts, "\n\n")
+end
+
 --- Run the configured planner and return its augmentation text.
 ---@param ctx table
 ---@return string
@@ -223,6 +281,7 @@ end
 
 M.register("planner", "react", M.planners.react)
 M.register("planner", "plan_first", M.planners.plan_first)
+M.register("planner", "scope", M.planners.scope)
 M.register("executor", "sequential", M.executors.sequential)
 M.register("executor", "parallel_reads", M.executors.parallel_reads)
 
