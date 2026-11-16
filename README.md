@@ -90,7 +90,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
    #   path: .agentfile/memory.md
    #   max_chars: 1200
    #   require_approval: true
-   skills: [read_file, write_file, edit_file, run_command, list_files, grep, glob, done]
+   skills: [read_file, write_file, edit_file, run_command, list_files, grep, glob, symbols, skeleton, done]
    ---
    ```
 
@@ -232,6 +232,8 @@ Tool output is wrapped in a ``` ```agentfile-result ``` code fence. Markers insi
 - `@grep({"pattern": "tool_calls", "path": "lua", "glob": "*.lua"})` searches file contents recursively (ripgrep when installed, Lua fallback otherwise).
 - `@glob({"pattern": "**/*.lua"})` finds files/directories by name.
 - `@list_files({"path": ".", "recursive": true, "max_depth": 2})` walks a small tree.
+- `@symbols({"path": "lua", "glob": "*.lua"})` lists top-level functions/classes to map a directory.
+- `@skeleton({"path": "lua/agentfile/ui.lua", "focus": "winbar"})` returns a pruned view (imports + signatures + one full body) to save context before editing.
 - `@run_command` accepts optional `cwd`, `env`, and `timeout_ms`. Long-running commands stream output into a floating window, and `:AgentfileCancel` kills the process.
 
 Set a default command timeout per chat:

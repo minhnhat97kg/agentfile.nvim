@@ -52,7 +52,7 @@ function M.default_template()
     "#   path: .agentfile/memory.md",
     "#   max_chars: 1200",
     "#   require_approval: true",
-    "skills: [read_file, write_file, edit_file, run_command, list_files, grep, glob, done]",
+    "skills: [read_file, write_file, edit_file, run_command, list_files, grep, glob, symbols, skeleton, done]",
     "---",
     "",
     markers.format("system"),
@@ -512,6 +512,7 @@ local function build_tools_prompt(config)
     .. "\nWait for results of all tool calls before choosing the next action. Do not repeat a successful read unless needed."
     .. "\nUse list_files for directories, read_file for files. Summarize when you have enough information."
     .. "\nUse grep to search contents and glob to find files by name; prefer them over reading many files."
+    .. "\nUse symbols to map structure and skeleton for a pruned view of a file before editing."
 
   local parts = { env }
   if tools_prompt and tools_prompt ~= "" then

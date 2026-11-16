@@ -197,12 +197,19 @@ It returns plain text such as "agentfile · generating · step 2/4 ·
 - @list_files({"path": ".", "recursive": true, "max_depth": 2})
 - @grep({"pattern": "tool_calls", "path": "lua", "glob": "*.lua"})
 - @glob({"pattern": "**/*.lua", "path": "lua"})
+- @symbols({"path": "lua", "glob": "*.lua"})
+- @skeleton({"path": "lua/agentfile/ui.lua", "focus": "winbar"})
 - @done({"summary": "what changed and how it was verified"})
 
 @grep searches file contents recursively and @glob finds files by name. Prefer
 them over reading many files. The detector uses ripgrep when installed and a
 slower Lua fallback otherwise. @list_files is non-recursive by default; pass
 recursive=true for a bounded tree walk.
+
+@symbols lists top-level declarations to map a directory, and @skeleton
+returns a pruned view of a file (imports + signatures, plus the full body of
+one focused symbol). They are text heuristics over source, not a persistent
+index, so always @read_file the exact range before editing.
 
 @run_command runs in `cwd` (default: Neovim's working directory), accepts an
 `env` mapping and a `timeout_ms` override, and streams output to a small

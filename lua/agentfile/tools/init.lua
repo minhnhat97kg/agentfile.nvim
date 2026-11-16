@@ -3,6 +3,7 @@ local fs = require("agentfile.tools.fs")
 local shell = require("agentfile.tools.shell")
 local image = require("agentfile.tools.image")
 local search = require("agentfile.tools.search")
+local symbols = require("agentfile.tools.symbols")
 
 local M = {}
 
@@ -119,6 +120,7 @@ TOOL CALLING RULES:
    EOF
    The body between the markers is the file content (for write_file), the replacement (for edit_file), or the command (for run_command).
 8. Locate files with @glob and search contents with @grep before reading many files. Prefer a narrow path/glob and a specific pattern.
+9. Use @symbols to map a directory's structure and @skeleton to get a pruned view of a file before editing; read the real file range with @read_file only when you need exact code.
 
 Correct:
 @read_file({"path": "src/main.rs"})
@@ -279,6 +281,30 @@ M.register("glob", {
   example = '@glob({"pattern": "**/*.lua", "path": "lua"})',
   is_dangerous = false,
   run = search.glob
+})
+
+M.register("symbols", {
+  description = "List top-level symbols (functions, classes, structs) in files matching a path/glob, to map code structure without reading whole files",
+  parameters = {
+    path = "string (optional, defaults to .)",
+    glob = "string (optional, default **/*)",
+    max_files = "number (optional, default 50)",
+    max_symbols = "number (optional, default 500)",
+  },
+  example = '@symbols({"path": "lua/agentfile", "glob": "*.lua"})',
+  is_dangerous = false,
+  run = symbols.symbols
+})
+
+M.register("skeleton", {
+  description = "Return a pruned view of a file: imports + declaration signatures, with full bodies only for the focused symbol. Saves context before editing",
+  parameters = {
+    path = "string",
+    focus = "string (optional, symbol name to include in full)",
+  },
+  example = '@skeleton({"path": "lua/agentfile/ui.lua", "focus": "winbar"})',
+  is_dangerous = false,
+  run = symbols.skeleton
 })
 
 M.register("run_command", {
