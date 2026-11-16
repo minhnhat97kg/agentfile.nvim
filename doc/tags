@@ -1,0 +1,10 @@
+agentfile-commands	agentfile.txt	/*agentfile-commands*
+agentfile-contents	agentfile.txt	/*agentfile-contents*
+agentfile-custom-tools	agentfile.txt	/*agentfile-custom-tools*
+agentfile-markers	agentfile.txt	/*agentfile-markers*
+agentfile-memory	agentfile.txt	/*agentfile-memory*
+agentfile-native-trajectory	agentfile.txt	/*agentfile-native-trajectory*
+agentfile-overview	agentfile.txt	/*agentfile-overview*
+agentfile-syntax	agentfile.txt	/*agentfile-syntax*
+agentfile-tools	agentfile.txt	/*agentfile-tools*
+agentfile.txt	agentfile.txt	/*agentfile.txt*

@@ -1,0 +1,5 @@
+# Default chat buffer (auto-created on first :Agentfile)
+chat.agentfile
+
+# Plugin data: sessions, project memory, exported trajectories
+.agentfile/

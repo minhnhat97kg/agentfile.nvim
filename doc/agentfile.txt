@@ -1,0 +1,283 @@
+*agentfile.txt*       A single-buffer AI agent workspace for Neovim
+
+Author: Agentfile Team
+License: MIT
+
+==============================================================================
+CONTENTS                                                    *agentfile-contents*
+
+  1. Overview ............................................. |agentfile-overview|
+  2. Buffer Syntax ........................................ |agentfile-syntax|
+  3. Commands & Keymaps ................................... |agentfile-commands|
+  4. Built-in Tools ....................................... |agentfile-tools|
+  5. Custom Tools ......................................... |agentfile-custom-tools|
+  6. Markers & Errors ...................................... |agentfile-markers|
+  7. Project Memory ....................................... |agentfile-memory|
+  8. Native Tool Calling & Trajectory ..... |agentfile-native-trajectory|
+
+==============================================================================
+1. OVERVIEW                                                *agentfile-overview*
+
+agentfile.nvim is a single-buffer AI chat and agent execution plugin for
+Neovim >= 0.10. Everything lives inside a single file (*.agentfile):
+- YAML Frontmatter at the top (host, model, token, skills)
+- Chat history ([system], [me], [agent])
+- Inner monologue / reasoning ([think]) which is folded and stripped from future context
+- Symmetric tool calling (@tool_name(json_args)) and explicit results ([result])
+
+The chat buffer uses `filetype=markdown` so markdown renderers work normally.
+Agentfile attaches its marker syntax, folding, and buffer-local keymaps on top.
+
+==============================================================================
+2. BUFFER SYNTAX                                             *agentfile-syntax*
+
+Example buffer structure:
+>
+    ---
+    host: http://localhost:9931/v1
+    model: ggml-org/gemma-4-E2B-it-GGUF:Q8_0
+    token: env:OPENAI_API_KEY
+    context_window: 32768
+    max_tokens: 2048
+    skills: [read_file, run_command]
+    auto_run_tools: false
+    agent:
+      enabled: true
+      max_steps: 4
+    ---
+
+    [system]
+    You are a helpful programming assistant.
+
+    [me](context 1234/32768)
+    Please run test suite:
+    @run_command({"command": "cargo test"})
+<
+OpenCode Go (OpenAI-compatible) needs a stable session header:
+>
+    host: https://opencode.ai/inference/go/openai/v1
+    model: deepseek-v4.1-flash
+    token: env:OPENCODE_API_KEY
+    session: agentfile-cua-toi
+    context_window: 1000000
+<
+`session` is sent as `x-opencode-session`. The API key must be valid.
+
+The latest [me] line shows an estimated context size:
+  (context used/limit)
+`limit` comes from `context_window` (default 32768). `used` is a rough token
+estimate of the next payload. It is refreshed when the file is opened, when
+a prompt is sent, and after the agent replies. The suffix is UI-only and is
+never sent to the model.
+
+==============================================================================
+3. COMMANDS & KEYMAPS                                      *agentfile-commands*
+
+Commands:
+  :Agentfile [filename]   Open or create a .agentfile chat buffer with template
+  :AgentfileToggle        Toggle chat buffer in a vertical side split
+  :AgentfileNew [topic]   Create a new session in .agentfile/ directory
+  :AgentfileSessions      Fuzzy select and open an existing session
+  :AgentfileBranch [name] Fork history up to cursor into a new session
+  :AgentfileDiag          Ingest LSP diagnostics into chat context
+  :AgentfileGitDiff       Ingest git diff into chat context
+  :AgentfileUndo          Revert file modification performed by tool under cursor
+  :AgentfileDiff          View unified diff of file modification under cursor
+  :AgentfileSend          Force send current turn to AI
+  :AgentfileCancel        Cancel ongoing streaming request
+  :AgentfileSelection     Send visual selection to the chat buffer
+                         (optional: snippet | tool)
+  :AgentfileContext       Add current file, files, or globs as context
+  :AgentfileApprove       Approve pending tool call
+  :AgentfileReject [note] Reject pending tool call with optional feedback note
+  :AgentfileExport [path] Export transcript as JSON trajectory (default
+                         .agentfile/trajectory-<timestamp>.json)
+  :AgentfileMemory        Open (and create if needed) the project memory file
+
+Buffer Local Keymaps:
+  <leader>oy             Approve pending tool call
+  <leader>on             Reject pending tool call
+  <leader>ou             Undo file modification of tool under cursor
+  <leader>oD             Show unified diff of file modification
+  <leader>ox             Cancel ongoing stream
+  <leader>os             Force send current turn
+
+Global Keymaps:
+  <leader>ot             Toggle Agentfile side-panel chat
+  <leader>od             Add LSP diagnostics to chat context
+  <leader>og             Add git diff to chat context
+  <leader>ob             Branch chat conversation from cursor
+  <leader>oc             Send visual selection to chat (visual mode)
+  <leader>of             Add current file as context (normal mode)
+  <leader>oF             Prompt for context files (normal mode)
+  <leader>oe             Export transcript as JSON trajectory
+  <leader>om             Open the project memory file
+
+Tool approval in the buffer ~
+Agent loop settings (per-chat frontmatter):
+  agent.enabled        Default true. False disables execution of model-issued
+                       tools; explicit tools in [me] still work.
+  agent.max_steps      Default 4. Positive integer; counts model requests per
+                       user prompt, including the initial response. Exhaustion
+                       produces [error]. A new [me] request resets the count.
+  agent.max_format_errors  Default 3. Consecutive invalid/truncated responses
+                       tolerated before stopping (0 = no limit). A response is
+                       "invalid" when it is empty or cut off by max_tokens.
+  agent.wall_time_limit    Default 0 (off). Seconds allowed for one user
+                       request before stopping.
+Legacy max_iterations: N maps to N + 1 model requests unless agent.max_steps
+is set. max_turns limits history, independently of the loop budget.
+Each request includes the current step and budget. The final allowed request
+asks the model to summarize available evidence without more tools. If ignored,
+the hard step limit still stops the loop.
+Model-issued read_file calls cannot read the active chat transcript, avoiding
+recursive copies of history. Explicit user tool calls can still read it.
+Reading a directory returns an error suggesting the exact list_files call.
+
+When auto_run_tools is false, a dangerous tool opens a vim.ui.select prompt.
+Choose Allow to execute it and continue the batch. Choose Deny or dismiss
+the prompt to reject it and stop the batch. The chat records a pending
+[result] while waiting, then replaces it with the execution/rejection result.
+This uses Neovim's default UI or your installed vim.ui.select override.
+New tool outputs use a agentfile-result code fence with a delimiter longer
+than any backtick run in the output. Markers inside it are literal data,
+including [system], [me], [agent], [result] and [reset]. The parser removes
+the envelope for the model payload and preserves the tool's content.
+This survives saving/reopening; unframed legacy results remain supported.
+Legacy [ask] blocks still accept y/n followed by :w. <leader>oy and
+<leader>on remain available as shortcuts.
+
+RESPONSE RECOVERY ~
+Transient HTTP failures (429, 5xx, connection errors) are retried with
+exponential backoff; auth/404/bad-URL failures fail immediately. Configure
+with `retries` (default 2) and `retry_delay_ms` (default 1000).
+
+A truncated response (finish_reason=length) or an empty response is treated as
+invalid: the plugin asks the model to retry, up to agent.max_format_errors.
+A failed tool result forces a one-sentence root-cause step before retrying.
+
+The context meter on the latest [me] line shows real token usage when
+`include_usage: true` is set (the provider must support
+stream_options.include_usage; several GGUF servers do not), calibrated
+against the character/4 estimate, plus `step N/M` and elapsed seconds.
+
+@done marks the task complete explicitly: call it ALONE as the final step
+after verifying. It records a completion status instead of relying on "no
+tool call" (which is ambiguous).
+
+==============================================================================
+4. BUILT-IN TOOLS                                             *agentfile-tools*
+
+- @read_file({"path": "file", "start_line": 1, "end_line": 50})
+- @write_file({"path": "file", "content": "..."})
+- @edit_file({"path": "file", "target": "old", "replacement": "new",
+              "occurrence": 2, "replace_all": false})
+- @run_command({"command": "..."})
+- @list_files({"path": "."})
+- @done({"summary": "what changed and how it was verified"})
+
+For multi-line code or scripts, pass the body as a heredoc so you never have
+to escape quotes or newlines inside a JSON string:
+>
+    @write_file({"path": "src/main.go"}) <<'EOF'
+    package main
+    func main() { println("hi") }
+    EOF
+<
+The body becomes `content` for @write_file, `replacement` for @edit_file, or
+`command` for @run_command. An unquoted delimiter (<<EOF) is also accepted.
+
+Tool output is truncated to ~30% of the context window (head + tail kept,
+with an elided-size note and a hint on how to read less). @run_command
+results always carry an explicit <returncode> so a failed command is not
+mistaken for a noisy success. @edit_file refuses an ambiguous target unless
+you pass `occurrence` (1-based) or `replace_all`.
+
+Read-only calls may be batched; at most ONE file-modifying or command call is
+allowed per turn.
+
+==============================================================================
+5. CUSTOM TOOLS                                         *agentfile-custom-tools*
+
+Register custom Lua tools via:
+>
+    require("agentfile").register_tool("git_diff", {
+      description = "Get current git diff",
+      parameters = {},
+      is_dangerous = false,
+      run = function(args, cb)
+        local out = vim.fn.system("git diff")
+        cb(true, out)
+      end
+    })
+<
+==============================================================================
+6. MARKERS & ERRORS                                         *agentfile-markers*
+
+Default block markers:
+  [system]  [me]  [think]  [agent]  [result id=N status=...]
+  [ask] question (y/N):   [reset]  [error]  [done]
+
+Legacy markers (>>me, #me, [me]) are still accepted.
+
+Change the markers globally in your setup:
+>
+    require("agentfile").setup({
+      markers = {
+        me     = "USER:",
+        agent  = "ASSISTANT:",
+        system = "SYSTEM:",
+        think  = "THOUGHTS:",
+        result = "<<result%s>>",  -- %s = attributes ( id=..., status=... )
+        ask    = "<<ask>> %s",    -- %s = question; must end with (y/N):
+        reset  = "RESET",
+        error  = "ERROR:",
+      },
+    })
+<
+
+Request and connection failures are written directly into the buffer as an
+| [error] block, followed by a fresh [me] block so you can retry. The error
+block is never sent to the model.
+
+==============================================================================
+7. PROJECT MEMORY                                         *agentfile-memory*
+
+Project memory stores distilled, verified lessons in a file (default
+`.agentfile/memory.md`) and injects them into the system prompt. It never
+stores raw [think] blocks: replayed reasoning makes small models defend the
+mistake instead of fixing it, and it burns context.
+
+Enable per-chat:
+>
+    memory:
+      enabled: true
+      path: .agentfile/memory.md
+      max_chars: 1200
+      require_approval: true
+      remember_rejections: true
+      remember_repeated_failures: true
+<
+
+Two signals produce a lesson (both require approval by default):
+  - a human rejection with a reason (`:AgentfileReject <reason>`), which is
+    already validated by the person steering the agent;
+  - a tool failing twice with the same normalized cause in one session.
+
+Lessons are deduplicated, length-limited, and capped by max_chars (oldest
+lines drop first). The file is plain markdown: edit it with
+`:AgentfileMemory` or by hand.
+
+==============================================================================
+8. NATIVE TOOL CALLING & TRAJECTORY                *agentfile-native-trajectory*
+
+Set `tool_mode: native` to use the provider's native tool_calls interface
+instead of parsing `@tool(...)` text. Native calls are rendered back into the
+transcript so the buffer remains the single source of truth. Text parsing is
+the fallback when the model returns no native calls.
+
+`:AgentfileExport [path]` writes the exact message list (with run metadata:
+model, agent config, token usage, step count, exit_status) as JSON for
+debugging, replay, evaluation and fine-tuning.
+
+vim:tw=78:ts=8:ft=help:norl:
