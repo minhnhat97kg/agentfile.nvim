@@ -7,10 +7,12 @@ local client = require("agentfile.client")
 local markers = require("agentfile.markers")
 local agent_config = require("agentfile.agent_config")
 local tool_result = require("agentfile.tool_result")
+local loop = require("agentfile.loop")
 
 local M = {}
 
 M.register_tool = tools.register
+M.register_strategy = loop.register
 M.last_chat_path = "chat.agentfile"
 M.defaults = {}
 
@@ -41,6 +43,8 @@ function M.default_template()
     "# retry_delay_ms: 1000",
     "# include_usage: true # bật để hiển thị số token thật trong meter (một số server GGUF không hỗ trợ)",
     "# tool_mode: text # text (mặc định) hoặc native (dùng tool_calls của API)",
+    "# planner: plan_first # react (mặc định) hoặc plan_first (lập kế hoạch trước khi gọi tool)",
+    "# executor: parallel_reads # sequential (mặc định) hoặc parallel_reads (chạy song song tool read-only)",
     "# memory:",
     "#   enabled: true",
     "#   path: .agentfile/memory.md",
@@ -696,22 +700,6 @@ local function render_native_calls(bufnr, calls)
   append_text_block(bufnr, markers.format("agent"), table.concat(lines, "\n"))
 end
 
---- Status of the most recent [result] in the active turn, or nil.
----@param blocks table[]
----@return string|nil
-local function last_result_status(blocks)
-  for i = #blocks, 1, -1 do
-    local block = blocks[i]
-    if block.role == "result" then
-      return block.status
-    end
-    if block.role == "user" then
-      return nil
-    end
-  end
-  return nil
-end
-
 --- Count repeated failures and offer a distilled lesson to project memory.
 ---@param bufnr number
 ---@param call table
@@ -907,37 +895,18 @@ function M.send(bufnr)
     messages = serializer.serialize_messages(blocks, tools_prompt, max_turns, {
       keep_think_on_error = keep_think_on_error(config),
     })
-    if agent.enabled then
-      local progress = string.format("Agent step %d of %d.", buf_state.agent_steps, agent.max_steps)
-      if buf_state.agent_steps == agent.max_steps then
-        progress = progress .. " This is your FINAL step. Do not call tools. Answer the user's request using the results already available."
-          .. " Clearly state anything you could not verify; do not invent unread file contents."
-      else
-        progress = progress .. " Avoid repeating successful reads/listings. Inspect relevant unread source files, then summarize."
-      end
-      messages[1].content = messages[1].content .. "\n\n" .. progress
-    end
 
-    local is_thinking_disabled = config.thinking == false or (type(config.thinking) == "table" and config.thinking.enabled == false)
-    local is_thinking_concise = config.thinking_concise == true or (type(config.thinking) == "table" and config.thinking.concise == true)
-
-    if is_thinking_disabled then
-      messages[1].content = messages[1].content .. "\n\nSkip internal thinking (<think>...</think>). Provide the response directly."
-    elseif is_thinking_concise then
-      messages[1].content = messages[1].content .. "\n\nThink concisely: keep your internal reasoning brief, focused, and under 150 words before answering."
-    end
-
-    -- Corrective nudge after a truncated or empty response.
-    if (buf_state.format_errors or 0) > 0 and buf_state.last_format_error then
-      messages[1].content = messages[1].content
-        .. "\n\nYour previous response was invalid: " .. buf_state.last_format_error
-        .. ". Respond with exactly one valid tool call or a concise final answer, and be brief."
-    end
-
-    -- Force an explicit root-cause step before retrying a failed tool.
-    if last_result_status(blocks) == "error" then
-      messages[1].content = messages[1].content
-        .. "\n\nThe last tool call failed. State the root cause in one sentence in [think], then do something different. Do not repeat the identical call."
+    -- Delegate system-prompt augmentation to the configured planner strategy
+    -- (progress note, thinking controls, recovery nudges, optional plan).
+    local augment = loop.run_planner({
+      bufnr = bufnr,
+      config = config,
+      agent = agent,
+      buf_state = buf_state,
+      blocks = blocks,
+    })
+    if augment ~= "" then
+      messages[1].content = messages[1].content .. "\n\n" .. augment
     end
   end
 
@@ -1177,39 +1146,20 @@ local function parse_ask_answer(block)
   return "invalid", nil
 end
 
--- Continue the current batch before asking the model for another response.
-local function continue_tool_batch(bufnr, remaining, config)
-  vim.schedule(function()
-    if not vim.api.nvim_buf_is_valid(bufnr) or state.get(bufnr).cancelled then
-      return
-    end
-    if remaining and #remaining > 0 then
-      M.handle_tool_calls(bufnr, remaining, config)
-    else
-      state.transition(bufnr, "idle")
-      M.send(bufnr)
-    end
-  end)
-end
-
---- Handle tool calls emitted by the agent, sequentially within one model turn.
-function M.handle_tool_calls(bufnr, tool_calls, config)
+--- Run a single tool call: explicit @done, approval gate, or execution.
+--- Calls cb("continue" | "done" | "stop") to tell the executor how to proceed.
+---@param bufnr number
+---@param config table
+---@param call table
+---@param cb function # receives "continue" | "done" | "stop"
+local function run_one_tool(bufnr, config, call, cb)
   local buf_state = state.get(bufnr)
-  if buf_state.cancelled or not vim.api.nvim_buf_is_valid(bufnr) then return end
-  if #tool_calls == 0 then return end
-  buf_state.iteration_count = buf_state.iteration_count + 1
-
-  state.transition(bufnr, "tools_running")
-
-  local call = tool_calls[1]
-  local remaining = {}
-  for i = 2, #tool_calls do remaining[#remaining + 1] = tool_calls[i] end
-  buf_state.tool_counter = buf_state.tool_counter + 1
-  local tool_id = buf_state.tool_counter
-
   local tool_spec = tools.get(call.name)
   local is_dangerous = tool_spec and tool_spec.is_dangerous
   local auto_run = config.auto_run_tools
+
+  buf_state.tool_counter = buf_state.tool_counter + 1
+  local tool_id = buf_state.tool_counter
 
   -- Explicit completion. Without it, "no tool call" is ambiguous: the model may
   -- have finished, or it may have forgotten the tool syntax.
@@ -1228,6 +1178,7 @@ function M.handle_tool_calls(bufnr, tool_calls, config)
 
     state.transition(bufnr, "idle")
     M.update_context_marker(bufnr, config)
+    cb("done")
     return
   end
 
@@ -1241,7 +1192,7 @@ function M.handle_tool_calls(bufnr, tool_calls, config)
       id = tool_id,
       call = call,
       config = config,
-      remaining = remaining,
+      resume = cb,
     }
     state.transition(bufnr, "awaiting_approval")
     local pending = buf_state.pending_tool
@@ -1280,8 +1231,38 @@ function M.handle_tool_calls(bufnr, tool_calls, config)
       note_failure(bufnr, call, result, config)
     end
 
-    continue_tool_batch(bufnr, remaining, config)
+    cb("continue")
   end, { id = tool_id, chat_path = vim.api.nvim_buf_get_name(bufnr), config = config })
+end
+
+--- Handle tool calls emitted by the agent, delegating order/parallelism to the
+--- configured executor strategy.
+---@param bufnr number
+---@param tool_calls table[]
+---@param config table
+function M.handle_tool_calls(bufnr, tool_calls, config)
+  local buf_state = state.get(bufnr)
+  if buf_state.cancelled or not vim.api.nvim_buf_is_valid(bufnr) then return end
+  if #tool_calls == 0 then return end
+  buf_state.iteration_count = buf_state.iteration_count + 1
+
+  state.transition(bufnr, "tools_running")
+
+  local agent = select(1, agent_config.resolve(config))
+  loop.run_executor({
+    bufnr = bufnr,
+    config = config,
+    agent = agent,
+    buf_state = buf_state,
+    calls = tool_calls,
+    run_one = function(call, cb)
+      run_one_tool(bufnr, config, call, cb)
+    end,
+    finish = function()
+      state.transition(bufnr, "idle")
+      M.send(bufnr)
+    end,
+  })
 end
 
 --- Find a result block by id (and optionally status).
@@ -1343,6 +1324,7 @@ function M.approve_tool(bufnr)
   end
 
   local pending = buf_state.pending_tool
+  local resume = pending.resume
   buf_state.pending_tool = nil
   state.transition(bufnr, "tools_running")
 
@@ -1365,7 +1347,9 @@ function M.approve_tool(bufnr)
       vim.api.nvim_buf_set_lines(bufnr, block.start_line - 1, block.end_line, false, replace_lines)
     end
     buf_state.suppress_save_hook = false
-    continue_tool_batch(bufnr, pending.remaining, pending.config)
+    if resume then
+      resume("continue")
+    end
   end, { id = pending.id, chat_path = vim.api.nvim_buf_get_name(bufnr), config = pending.config })
 end
 
