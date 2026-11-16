@@ -8,6 +8,7 @@ local markers = require("agentfile.markers")
 local agent_config = require("agentfile.agent_config")
 local tool_result = require("agentfile.tool_result")
 local loop = require("agentfile.loop")
+local ui = require("agentfile.ui")
 
 local M = {}
 
@@ -39,6 +40,7 @@ function M.default_template()
     "  max_steps: 4 # số lần gọi model cho mỗi yêu cầu",
     "  max_format_errors: 3 # dừng khi model trả lời hỏng liên tiếp (0 = không giới hạn)",
     "  # wall_time_limit: 300 # giây cho mỗi yêu cầu (0 = không giới hạn)",
+    "  # command_timeout: 120 # giây tối đa cho @run_command",
     "# retries: 2 # thử lại khi 429/5xx/mất kết nối",
     "# retry_delay_ms: 1000",
     "# include_usage: true # bật để hiển thị số token thật trong meter (một số server GGUF không hỗ trợ)",
@@ -50,7 +52,7 @@ function M.default_template()
     "#   path: .agentfile/memory.md",
     "#   max_chars: 1200",
     "#   require_approval: true",
-    "skills: [read_file, write_file, edit_file, run_command, list_files, done]",
+    "skills: [read_file, write_file, edit_file, run_command, list_files, grep, glob, done]",
     "---",
     "",
     markers.format("system"),
@@ -509,6 +511,7 @@ local function build_tools_prompt(config)
     .. "\nDo not read the active chat file: this conversation is already in context. Entries marked [directory] require list_files, not read_file."
     .. "\nWait for results of all tool calls before choosing the next action. Do not repeat a successful read unless needed."
     .. "\nUse list_files for directories, read_file for files. Summarize when you have enough information."
+    .. "\nUse grep to search contents and glob to find files by name; prefer them over reading many files."
 
   local parts = { env }
   if tools_prompt and tools_prompt ~= "" then
@@ -569,6 +572,7 @@ function M.update_context_marker(bufnr, config)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local _, end_fm = parser.parse_frontmatter(lines)
   local blocks = parser.parse_blocks(lines, end_fm + 1)
+  local buf_state = state.get(bufnr)
 
   local target = nil
   for i = #blocks, 1, -1 do
@@ -578,10 +582,12 @@ function M.update_context_marker(bufnr, config)
     end
   end
   if not target then
+    buf_state.context_used = nil
+    buf_state.context_limit = nil
+    ui.clear_context(bufnr)
     return
   end
 
-  local buf_state = state.get(bufnr)
   local tools_prompt = build_tools_prompt(config)
   local messages = serializer.serialize_messages(blocks, tools_prompt, config.max_turns, {
     keep_think_on_error = keep_think_on_error(config),
@@ -604,29 +610,34 @@ function M.update_context_marker(bufnr, config)
   local suffix = string.format("(context %d/%d%s)", used, limit, detail)
   local new_line = markers.format("me") .. suffix
 
-  if lines[target.start_line] == new_line then
-    return
+  -- Keep the latest values for the winbar/statusline (cheap, no re-parse).
+  buf_state.context_used = used
+  buf_state.context_limit = limit
+
+  if lines[target.start_line] ~= new_line then
+    local was_modified = vim.bo[bufnr].modified
+    local was_suppressed = buf_state.suppress_save_hook
+    buf_state.suppress_save_hook = true
+    local ok = pcall(
+      vim.api.nvim_buf_set_lines,
+      bufnr,
+      target.start_line - 1,
+      target.start_line,
+      false,
+      { new_line }
+    )
+    buf_state.suppress_save_hook = was_suppressed
+
+    -- Updating our own meter must not leave a clean buffer marked as modified.
+    if ok and not was_modified then
+      pcall(function()
+        vim.bo[bufnr].modified = false
+      end)
+    end
   end
 
-  local was_modified = vim.bo[bufnr].modified
-  local was_suppressed = buf_state.suppress_save_hook
-  buf_state.suppress_save_hook = true
-  local ok = pcall(
-    vim.api.nvim_buf_set_lines,
-    bufnr,
-    target.start_line - 1,
-    target.start_line,
-    false,
-    { new_line }
-  )
-  buf_state.suppress_save_hook = was_suppressed
-
-  -- Updating our own meter must not leave a clean buffer marked as modified.
-  if ok and not was_modified then
-    pcall(function()
-      vim.bo[bufnr].modified = false
-    end)
-  end
+  -- Highlight only the UI-only suffix; the marker itself keeps its own color.
+  ui.highlight_context(bufnr, target.start_line, #new_line - #suffix, #new_line, used, limit)
 end
 
 --- Show a request/connection error directly in the buffer using the error marker.
@@ -764,6 +775,43 @@ local function retry_format_error(bufnr, config, agent, buf_state, reason)
   end)
 end
 
+--- Execute a tool and, for run_command, stream output into a floating window.
+---@param bufnr number
+---@param call table # { name, args }
+---@param cb function(success: boolean, result: string)
+---@param context? table
+local function execute_tool_with_progress(bufnr, call, cb, context)
+  local buf_state = state.get(bufnr)
+  local progress = nil
+
+  if call.name == "run_command" then
+    local summary = tostring(call.args and call.args.command or ""):gsub("[\r\n]+", " "):sub(1, 40)
+    progress = ui.command_progress("agentfile: " .. summary)
+    buf_state.active_progress = progress
+  end
+
+  local function finish(ok, result)
+    if progress then
+      progress:close()
+      if buf_state.active_progress == progress then
+        buf_state.active_progress = nil
+      end
+    end
+    cb(ok, result)
+  end
+
+  local exec_context = vim.tbl_extend("force", context or {}, {
+    bufnr = bufnr,
+    buf_state = buf_state,
+    on_output = function(chunk)
+      if progress then
+        progress:append(chunk)
+      end
+    end,
+  })
+  tools.execute(call.name, call.args, finish, exec_context)
+end
+
 --- Main send trigger
 ---@param bufnr number
 function M.send(bufnr)
@@ -824,7 +872,8 @@ function M.send(bufnr)
       if pair.block_index == #blocks and not pair.result then
         -- Execute user-invoked tool before sending to LLM!
         state.transition(bufnr, "tools_running")
-        tools.execute(pair.tool.name, pair.tool.args, function(ok, result)
+        execute_tool_with_progress(bufnr, pair.tool, function(ok, result)
+          if buf_state.cancelled or not vim.api.nvim_buf_is_valid(bufnr) then return end
           buf_state.suppress_save_hook = true
           local status = ok and "ok" or "error"
           append_block_header(bufnr, markers.format("result", { id = pair.id, status = status }))
@@ -1215,7 +1264,7 @@ local function run_one_tool(bufnr, config, call, cb)
   end
 
   -- Auto-run or read-only tool
-  tools.execute(call.name, call.args, function(ok, result)
+  execute_tool_with_progress(bufnr, call, function(ok, result)
     if buf_state.cancelled or not vim.api.nvim_buf_is_valid(bufnr) then return end
     buf_state.suppress_save_hook = true
     local status = ok and "ok" or "error"
@@ -1328,7 +1377,7 @@ function M.approve_tool(bufnr)
   buf_state.pending_tool = nil
   state.transition(bufnr, "tools_running")
 
-  tools.execute(pending.call.name, pending.call.args, function(ok, result)
+  execute_tool_with_progress(bufnr, pending.call, function(ok, result)
     if buf_state.cancelled or not vim.api.nvim_buf_is_valid(bufnr) then return end
     buf_state.suppress_save_hook = true
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
@@ -1413,7 +1462,7 @@ end
 function M.cancel(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local buf_state = state.get(bufnr)
-  local had_job = buf_state.active_job ~= nil
+  local had_job = buf_state.active_job ~= nil or buf_state.active_command ~= nil
 
   buf_state.cancelled = true
   buf_state.exit_status = "cancelled"
@@ -1427,6 +1476,17 @@ function M.cancel(bufnr)
     pcall(function() buf_state.active_job:kill(9) end)
     buf_state.active_job = nil
   end
+
+  if buf_state.active_command then
+    pcall(function() buf_state.active_command:kill(9) end)
+    buf_state.active_command = nil
+  end
+
+  if buf_state.active_progress then
+    pcall(function() buf_state.active_progress:close() end)
+    buf_state.active_progress = nil
+  end
+
   buf_state.suppress_save_hook = false
   state.transition(bufnr, "idle")
 
@@ -1674,7 +1734,7 @@ function M.setup(opts)
   opts = opts or {}
   M.defaults = opts.defaults or opts.config or {}
   markers.setup(opts.markers)
-  local ui = require("agentfile.ui")
+  ui.setup(opts.ui)
 
   local group = vim.api.nvim_create_augroup("AgentfileAutoCmds", { clear = true })
   vim.api.nvim_create_autocmd("BufWritePost", {

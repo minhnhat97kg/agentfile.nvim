@@ -11,6 +11,7 @@
 - **Save-to-Send**: Just type under `[me] ...` and hit `:w` to send the prompt or trigger the next reasoning turn.
 - **Turn Detection & Reentrancy Guarding**: No accidental duplicate sends when you edit the header or reformat the file.
 - **Symmetric Tool Calling**: You and the AI share the same `@tool_name(json_args)` syntax.
+- **Codebase Search**: `@grep` and `@glob` find code by content/name; `@list_files` can walk a bounded tree.
 - **Heredoc for Multi-line Content**: Pass multi-line code via `<<'EOF' ... EOF` without escaping into a JSON string.
 - **`[think]` Reasoning**: Thinking blocks render on the buffer and fold automatically, **but are stripped from the API payload** to keep context lean.
 - **Human-in-the-loop**: Approve dangerous tools (`auto_run_tools: false`), reject with feedback to steer the agent immediately.
@@ -89,7 +90,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
    #   path: .agentfile/memory.md
    #   max_chars: 1200
    #   require_approval: true
-   skills: [read_file, write_file, edit_file, run_command, list_files, done]
+   skills: [read_file, write_file, edit_file, run_command, list_files, grep, glob, done]
    ---
    ```
 
@@ -127,6 +128,35 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 | `:AgentfileExport [path]` (`<leader>ae`) | Export the transcript as a JSON trajectory |
 | `:AgentfileMemory` (`<leader>am`) | Open (and create if needed) the project memory file |
 
+### UI & status
+
+The chat window gets a lightweight winbar with the live agent state, step budget,
+context usage and model name:
+
+```text
+ agentfile    ◐ generating   step 2/4   12.4k/32.8k (38%)   gemma-4-E2B
+```
+
+- The context percentage turns **yellow at 70%** and **red at 90%**.
+- `[think]` and `[result]` folds show a compact summary with status icons
+  (`✓` ok, `✗` error, `◌` pending, `⊘` rejected) and a first-line preview.
+- Result markers are color-coded by status (`ok`, `error`, `pending`, `rejected`).
+- The diff split has a title bar and is tuned for reading unified diffs.
+
+Disable the winbar if you use a winbar plugin, or expose the plain-text status
+to your statusline:
+
+```lua
+require("agentfile").setup({
+  ui = {
+    winbar = false,
+  },
+})
+
+-- e.g. in lualine:
+-- sections.lualine_x = { function() return require("agentfile.ui").statusline() end }
+```
+
 ### Tool approval & agent steering
 
 When a dangerous tool needs approval (`auto_run_tools: false`):
@@ -145,6 +175,7 @@ agent:
   max_steps: 4            # max model calls per [me] request
   max_format_errors: 3    # stop after N consecutive malformed responses (0 = unlimited)
   # wall_time_limit: 300  # seconds per request (0 = unlimited)
+  # command_timeout: 120  # seconds per @run_command
 ```
 
 - `enabled` defaults to `true`. Set `false` for plain chat: the plugin renders the reply but does not auto-run model-issued tools.
@@ -195,6 +226,20 @@ The body becomes `content` (`write_file`), `replacement` (`edit_file`), or `comm
 ### Tool results
 
 Tool output is wrapped in a ``` ```agentfile-result ``` code fence. Markers inside it are literal data, not chat blocks. When sending to the model, the plugin removes the envelope and keeps the content as the tool-result message.
+
+### Search & command execution
+
+- `@grep({"pattern": "tool_calls", "path": "lua", "glob": "*.lua"})` searches file contents recursively (ripgrep when installed, Lua fallback otherwise).
+- `@glob({"pattern": "**/*.lua"})` finds files/directories by name.
+- `@list_files({"path": ".", "recursive": true, "max_depth": 2})` walks a small tree.
+- `@run_command` accepts optional `cwd`, `env`, and `timeout_ms`. Long-running commands stream output into a floating window, and `:AgentfileCancel` kills the process.
+
+Set a default command timeout per chat:
+
+```yaml
+agent:
+  command_timeout: 120 # seconds
+```
 
 ### Context budget & failure recovery
 

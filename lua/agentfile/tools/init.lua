@@ -2,6 +2,7 @@
 local fs = require("agentfile.tools.fs")
 local shell = require("agentfile.tools.shell")
 local image = require("agentfile.tools.image")
+local search = require("agentfile.tools.search")
 
 local M = {}
 
@@ -117,6 +118,7 @@ TOOL CALLING RULES:
    func main() { println("hi") }
    EOF
    The body between the markers is the file content (for write_file), the replacement (for edit_file), or the command (for run_command).
+8. Locate files with @glob and search contents with @grep before reading many files. Prefer a narrow path/glob and a specific pattern.
 
 Correct:
 @read_file({"path": "src/main.rs"})
@@ -237,17 +239,58 @@ M.register("edit_file", {
 })
 
 M.register("list_files", {
-  description = "List directory entries with paths ready to use in read_file/list_files; does not change working directory",
-  parameters = { path = "string (optional, defaults to .)" },
-  example = '@list_files({"path": "."})',
+  description = "List directory entries with paths ready to use in read_file/list_files; use recursive=true to walk a small tree",
+  parameters = {
+    path = "string (optional, defaults to .)",
+    recursive = "boolean (optional, default false)",
+    max_depth = "number (optional, default 3)",
+    max_entries = "number (optional, default 500)",
+  },
+  example = '@list_files({"path": ".", "recursive": true, "max_depth": 2})',
   is_dangerous = false,
   run = fs.list_files
 })
 
+M.register("grep", {
+  description = "Search file contents recursively (ripgrep when available). Prefer this over reading many files; returns path:line: text",
+  parameters = {
+    pattern = "string (regex; use fixed_strings for literal text)",
+    path = "string (optional, defaults to .)",
+    glob = "string (optional, e.g. *.lua or src/**/*.ts)",
+    case_sensitive = "boolean (optional; default smart-case)",
+    fixed_strings = "boolean (optional)",
+    context_lines = "number (optional, default 0)",
+    max_results = "number (optional, default 100)",
+    timeout_ms = "number (optional, default 30000)",
+  },
+  example = '@grep({"pattern": "tool_calls", "path": "lua", "glob": "*.lua"})',
+  is_dangerous = false,
+  run = search.grep
+})
+
+M.register("glob", {
+  description = "Find files or directories by glob pattern (e.g. **/*.lua) without reading file contents",
+  parameters = {
+    pattern = "string (optional, default **/*)",
+    path = "string (optional, defaults to .)",
+    type = "string (optional: file, dir, or all; default file)",
+    max_results = "number (optional, default 500)",
+  },
+  example = '@glob({"pattern": "**/*.lua", "path": "lua"})',
+  is_dangerous = false,
+  run = search.glob
+})
+
 M.register("run_command", {
-  description = "Execute shell command in background and capture stdout/stderr. Multi-line script: @run_command <<'EOF' ... EOF",
-  parameters = { command = "string (or heredoc body)" },
-  example = '@run_command({"command": "cargo test"})',
+  description = "Execute a shell command in the background and capture stdout/stderr. Supports cwd, env, and timeout. Multi-line script: @run_command <<'EOF' ... EOF",
+  parameters = {
+    command = "string (or heredoc body)",
+    cwd = "string (optional, defaults to Neovim's working directory)",
+    env = "object (optional, extra environment variables)",
+    timeout_ms = "number (optional, default 120000)",
+    stdin = "string (optional)",
+  },
+  example = '@run_command({"command": "cargo test", "timeout_ms": 120000})',
   is_dangerous = true,
   run = shell.run_command
 })

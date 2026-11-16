@@ -42,6 +42,15 @@ function M.resolve(config)
     return nil, "agent.wall_time_limit must be a non-negative number of seconds"
   end
 
+  -- Default timeout for @run_command, in seconds.
+  local command_timeout = agent.command_timeout
+  if command_timeout == nil then
+    command_timeout = config.command_timeout
+  end
+  if command_timeout ~= nil and (type(command_timeout) ~= "number" or command_timeout <= 0) then
+    return nil, "agent.command_timeout must be a positive number of seconds"
+  end
+
   -- Transient HTTP failures (429/5xx/connection) are retried automatically.
   local retries = config.retries
   if retries == nil then retries = agent.retries end
@@ -60,6 +69,7 @@ function M.resolve(config)
     max_steps = max_steps,
     max_format_errors = max_format_errors,
     wall_time_limit = wall_time_limit,
+    command_timeout = command_timeout,
     retries = retries,
     retry_delay_ms = retry_delay_ms,
   }

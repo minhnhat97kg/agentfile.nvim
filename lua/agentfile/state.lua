@@ -25,6 +25,8 @@ function M.reset(bufnr)
     last_sent_hash = "",
     suppress_save_hook = false,
     active_job = nil,
+    active_command = nil,
+    active_progress = nil,
     flush_timer = nil,
     writer = nil,
     pending_tool = nil,

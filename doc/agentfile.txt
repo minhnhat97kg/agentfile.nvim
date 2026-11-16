@@ -9,6 +9,7 @@ CONTENTS                                                    *agentfile-contents*
   1. Overview ............................................. |agentfile-overview|
   2. Buffer Syntax ........................................ |agentfile-syntax|
   3. Commands & Keymaps ................................... |agentfile-commands|
+     UI & Status .............................................. |agentfile-ui|
   4. Built-in Tools ....................................... |agentfile-tools|
   5. Custom Tools ......................................... |agentfile-custom-tools|
   6. Markers & Errors ...................................... |agentfile-markers|
@@ -125,6 +126,8 @@ Agent loop settings (per-chat frontmatter):
                        "invalid" when it is empty or cut off by max_tokens.
   agent.wall_time_limit    Default 0 (off). Seconds allowed for one user
                        request before stopping.
+  agent.command_timeout   Default 120. Seconds allowed for one @run_command.
+                       Overridable per call with timeout_ms.
 Legacy max_iterations: N maps to N + 1 model requests unless agent.max_steps
 is set. max_turns limits history, independently of the loop budget.
 Each request includes the current step and budget. The final allowed request
@@ -165,6 +168,24 @@ against the character/4 estimate, plus `step N/M` and elapsed seconds.
 after verifying. It records a completion status instead of relying on "no
 tool call" (which is ambiguous).
 
+UI & STATUS ~
+                                                                    *agentfile-ui*
+The chat window shows a winbar with the agent state, step budget, context
+usage and model name. Context usage turns yellow at 70% and red at 90%.
+[think] and [result] folds render a one-line summary with a status icon
+(ok, error, pending, rejected) and the first content line.
+
+Disable the winbar with:
+>
+    require("agentfile").setup({ ui = { winbar = false } })
+<
+For a statusline component, use:
+>
+    require("agentfile.ui").statusline()
+<
+It returns plain text such as "agentfile · generating · step 2/4 ·
+12.4k/32.8k (38%) · model".
+
 ==============================================================================
 4. BUILT-IN TOOLS                                             *agentfile-tools*
 
@@ -172,9 +193,25 @@ tool call" (which is ambiguous).
 - @write_file({"path": "file", "content": "..."})
 - @edit_file({"path": "file", "target": "old", "replacement": "new",
               "occurrence": 2, "replace_all": false})
-- @run_command({"command": "..."})
-- @list_files({"path": "."})
+- @run_command({"command": "...", "cwd": ".", "timeout_ms": 120000})
+- @list_files({"path": ".", "recursive": true, "max_depth": 2})
+- @grep({"pattern": "tool_calls", "path": "lua", "glob": "*.lua"})
+- @glob({"pattern": "**/*.lua", "path": "lua"})
 - @done({"summary": "what changed and how it was verified"})
+
+@grep searches file contents recursively and @glob finds files by name. Prefer
+them over reading many files. The detector uses ripgrep when installed and a
+slower Lua fallback otherwise. @list_files is non-recursive by default; pass
+recursive=true for a bounded tree walk.
+
+@run_command runs in `cwd` (default: Neovim's working directory), accepts an
+`env` mapping and a `timeout_ms` override, and streams output to a small
+floating window for long commands. `:AgentfileCancel` kills the process.
+Set a default timeout per chat:
+>
+    agent:
+      command_timeout: 120   # seconds
+<
 
 For multi-line code or scripts, pass the body as a heredoc so you never have
 to escape quotes or newlines inside a JSON string:

@@ -7,4 +7,5 @@ agentfile-native-trajectory	agentfile.txt	/*agentfile-native-trajectory*
 agentfile-overview	agentfile.txt	/*agentfile-overview*
 agentfile-syntax	agentfile.txt	/*agentfile-syntax*
 agentfile-tools	agentfile.txt	/*agentfile-tools*
+agentfile-ui	agentfile.txt	/*agentfile-ui*
 agentfile.txt	agentfile.txt	/*agentfile.txt*

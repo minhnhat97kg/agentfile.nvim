@@ -28,6 +28,20 @@ syntax match agentfileAgent /^\[agent\]/
 syntax match agentfileResult /^>>result\([ _]id=\d\+\)\?\([ _]status=\w\+\)\?/
 syntax match agentfileResult /^#result\([ _]id=\d\+\)\?\([ _]status=\w\+\)\?/
 syntax match agentfileResult /^\[result\( id=\d\+\)\?\( status=\w\+\)\?\]/
+
+" Result status variants (defined after the generic match so they win)
+syntax match agentfileResultOk /^\[result[^]]*status=ok[^]]*\]/
+syntax match agentfileResultOk /^>>result\>.*[ _]status=ok\>/
+syntax match agentfileResultOk /^#result\>.*[ _]status=ok\>/
+syntax match agentfileResultError /^\[result[^]]*status=error[^]]*\]/
+syntax match agentfileResultError /^>>result\>.*[ _]status=error\>/
+syntax match agentfileResultError /^#result\>.*[ _]status=error\>/
+syntax match agentfileResultPending /^\[result[^]]*status=pending[^]]*\]/
+syntax match agentfileResultPending /^>>result\>.*[ _]status=pending\>/
+syntax match agentfileResultPending /^#result\>.*[ _]status=pending\>/
+syntax match agentfileResultRejected /^\[result[^]]*status=rejected[^]]*\]/
+syntax match agentfileResultRejected /^>>result\>.*[ _]status=rejected\>/
+syntax match agentfileResultRejected /^#result\>.*[ _]status=rejected\>/
 syntax match agentfileAsk /^>>ask\>/
 syntax match agentfileAsk /^#ask\>/
 syntax match agentfileAsk /^\[ask\]/
@@ -58,6 +72,10 @@ highlight default link agentfileMe Title
 highlight default link agentfileThinkHeader Comment
 highlight default link agentfileAgent Special
 highlight default link agentfileResult Type
+highlight default link agentfileResultOk DiagnosticOk
+highlight default link agentfileResultError DiagnosticError
+highlight default link agentfileResultPending DiagnosticWarn
+highlight default link agentfileResultRejected Comment
 highlight default link agentfileAsk DiagnosticWarn
 highlight default link agentfileReset WarningMsg
 highlight default link agentfileError DiagnosticError

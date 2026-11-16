@@ -193,22 +193,67 @@ function M.list_files(args, cb, context)
   if type(dir) ~= "string" or dir == "" then
     return cb(false, "Error: 'path' must be a non-empty directory path")
   end
-  dir = vim.fs.normalize(dir)
+  dir = vim.fs.normalize(vim.fn.expand(dir))
+  if vim.fn.isdirectory(dir) == 0 then
+    return cb(false, "Error: could not list directory " .. dir .. ": not a directory")
+  end
   local uv = vim.uv or vim.loop
-  local scan, err = uv.fs_scandir(dir)
-  if not scan then
-    return cb(false, "Error: could not list directory " .. dir .. ": " .. tostring(err))
-  end
+  local recursive = args.recursive == true
+  local max_entries = tonumber(args.max_entries) or 500
+  if max_entries < 1 then max_entries = 1 end
   local entries = {}
-  while true do
-    local name, kind = uv.fs_scandir_next(scan)
-    if not name then break end
-    local path = vim.fs.joinpath(dir, name)
-    entries[#entries + 1] = { path = path, kind = kind or "unknown" }
+
+  local ignored = {
+    [".git"] = true,
+    [".hg"] = true,
+    [".svn"] = true,
+    [".agentfile"] = true,
+    [".venv"] = true,
+    ["venv"] = true,
+    ["node_modules"] = true,
+  }
+
+  if recursive then
+    local depth = tonumber(args.max_depth) or 3
+    if depth < 1 then depth = 1 end
+    local ok, iter, state = pcall(vim.fs.dir, dir, { depth = depth })
+    if not ok then
+      return cb(false, "Error: could not list directory " .. dir .. ": " .. tostring(iter))
+    end
+    for name, kind in iter, state do
+      local skip = false
+      for part in name:gmatch("[^/\\]+") do
+        if ignored[part] or part:sub(1, 1) == "." then
+          skip = true
+          break
+        end
+      end
+      if not skip then
+        entries[#entries + 1] = { path = vim.fs.joinpath(dir, name), kind = kind or "unknown" }
+      end
+    end
+  else
+    local scan, err = uv.fs_scandir(dir)
+    if not scan then
+      return cb(false, "Error: could not list directory " .. dir .. ": " .. tostring(err))
+    end
+    while true do
+      local name, kind = uv.fs_scandir_next(scan)
+      if not name then break end
+      local path = vim.fs.joinpath(dir, name)
+      entries[#entries + 1] = { path = path, kind = kind or "unknown" }
+    end
   end
+
   table.sort(entries, function(a, b) return a.path < b.path end)
+  local truncated = false
+  if #entries > max_entries then
+    entries = vim.list_slice(entries, 1, max_entries)
+    truncated = true
+  end
+
   local lines = {
-    "Directory: " .. dir,
+    "Directory" .. (recursive and " (recursive)" or "") .. ": " .. dir,
     "Working directory: " .. vim.fn.getcwd(),
     "Use the paths below as-is in tools. Listing a directory does not change the working directory.",
   }
@@ -216,6 +261,9 @@ function M.list_files(args, cb, context)
     lines[#lines + 1] = "[" .. entry.kind .. "] " .. entry.path
   end
   if #entries == 0 then lines[#lines + 1] = "(empty directory)" end
+  if truncated then
+    lines[#lines + 1] = string.format("(truncated at %d entries; list a subdirectory instead)", max_entries)
+  end
   local text = table.concat(lines, "\n")
   text = truncate.text(text, {
     max_chars = truncate.budget(context and context.config),
